@@ -29,7 +29,7 @@ export async function saveWorksheetRecord(record) {
     updated_at: new Date().toISOString(),
   }
 
-  const { data, error } = await supabaseAdmin.from('ai_sessions').insert(payload)
+  const { data, error } = await supabaseAdmin.from('ai_reading').insert(payload)
   if (error) {
     throw error
   }
