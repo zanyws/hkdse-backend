@@ -3,10 +3,15 @@ import cors from 'cors'
 import multer from 'multer'
 import { createRequire } from 'module'
 import 'dotenv/config'
+import { createClerkClient } from '@clerk/clerk-sdk-node'
+import { saveWorksheetRecord } from './supabaseClient.js'
 
 const require = createRequire(import.meta.url)
 const app = express()
 const PORT = process.env.PORT || 3001
+
+// Initialize Clerk
+const clerkClient = createClerkClient({ secretKey: process.env.CLERK_SECRET_KEY })
 
 app.use(cors({
   origin: [
@@ -70,6 +75,50 @@ app.post('/api/ai-proxy', async (req, res) => {
   } catch (e) {
     console.error('AI proxy error:', e)
     res.status(500).json({ error: e.message || 'AI 代理請求失敗' })
+  }
+})
+
+// ── Save generated worksheet session to Supabase ───────────────────
+app.post('/api/save-worksheet', async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ error: '缺少認證 token' })
+    }
+    const token = authHeader.substring(7) // Remove 'Bearer '
+
+    // Verify Clerk token
+    const payload = await clerkClient.verifyToken(token)
+    if (!payload || !payload.sub) {
+      return res.status(401).json({ error: '無效的認證 token' })
+    }
+    const userId = payload.sub
+
+    const payloadData = req.body
+    if (!payloadData || !payloadData.pageId || !payloadData.response) {
+      return res.status(400).json({ error: '缺少要儲存的頁面或結果資料' })
+    }
+
+    const record = {
+      userId,
+      title: payloadData.title || null,
+      author: payloadData.author || null,
+      dynasty: payloadData.dynasty || null,
+      provider: payloadData.provider || null,
+      model: payloadData.model || null,
+      pageId: payloadData.pageId,
+      pageName: payloadData.pageName || null,
+      prompt: payloadData.prompt || null,
+      response: payloadData.response,
+      worksheetData: payloadData.worksheetData || null,
+      metadata: payloadData.metadata || null,
+    }
+
+    const data = await saveWorksheetRecord(record)
+    res.json({ ok: true, data })
+  } catch (e) {
+    console.error('Save worksheet error:', e)
+    res.status(500).json({ error: e.message || '無法儲存雲端資料' })
   }
 })
 
