@@ -4,7 +4,7 @@ import multer from 'multer'
 import { createRequire } from 'module'
 import 'dotenv/config'
 import { createClerkClient } from '@clerk/clerk-sdk-node'
-import { saveWorksheetRecord } from './supabaseClient.js'
+import { saveWorksheetRecord, getWorkSheetsByUser } from './supabaseClient.js'
 
 const require = createRequire(import.meta.url)
 const app = express()
@@ -119,6 +119,28 @@ app.post('/api/save-worksheet', async (req, res) => {
   } catch (e) {
     console.error('Save worksheet error:', e)
     res.status(500).json({ error: e.message || '無法儲存雲端資料' })
+  }
+})
+
+app.get('/api/worksheets', async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ error: '缺少認證 token' })
+    }
+    const token = authHeader.substring(7)
+
+    const payload = await clerkClient.verifyToken(token)
+    if (!payload || !payload.sub) {
+      return res.status(401).json({ error: '無效的認證 token' })
+    }
+    const userId = payload.sub
+
+    const data = await getWorkSheetsByUser(userId)
+    res.json({ ok: true, data })
+  } catch (e) {
+    console.error('Fetch worksheets error:', e)
+    res.status(500).json({ error: e.message || '無法取得雲端資料' })
   }
 })
 

@@ -35,3 +35,16 @@ export async function saveWorksheetRecord(record) {
   }
   return data
 }
+
+export async function getWorkSheetsByUser(userId) {
+  const { data, error } = await supabaseAdmin
+    .from('ai_reading')
+    .select('*')
+    .eq('user_id', userId)
+    .order('created_at', { ascending: false })
+
+  if (error) {
+    throw error
+  }
+  return data
+}
