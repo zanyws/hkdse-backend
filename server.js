@@ -144,6 +144,65 @@ app.get('/api/worksheets', async (req, res) => {
   }
 })
 
+// ── Trial API (server-side Gemini key) ──────────────────────────
+app.post('/api/trial', async (req, res) => {
+  // Verify Clerk token
+  try {
+    const authHeader = req.headers.authorization
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ error: '請先登入才能使用試用 API' })
+    }
+    const token = authHeader.substring(7)
+    const payload = await clerkClient.verifyToken(token)
+    if (!payload || !payload.sub) {
+      return res.status(401).json({ error: '無效的認證 token' })
+    }
+  } catch (e) {
+    return res.status(401).json({ error: '認證失敗：' + e.message })
+  }
+
+  const apiKey = process.env.TRIAL_GEMINI_API_KEY
+  const model  = process.env.TRIAL_GEMINI_MODEL || 'gemini-2.0-flash'
+
+  if (!apiKey) {
+    return res.status(503).json({ error: '試用 API 暫未開放，請自行設定 API Key' })
+  }
+
+  const { systemPrompt, userPrompt, maxTokens = 65536 } = req.body
+  if (!userPrompt) {
+    return res.status(400).json({ error: '缺少 userPrompt' })
+  }
+
+  try {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{
+          parts: [{ text: systemPrompt ? `${systemPrompt}\n\n${userPrompt}` : userPrompt }]
+        }],
+        generationConfig: {
+          maxOutputTokens: Math.min(maxTokens, 65536),
+          temperature: 0.3,
+        },
+      }),
+    })
+
+    const data = await response.json()
+    if (!response.ok) {
+      const msg = data?.error?.message || `Gemini HTTP ${response.status}`
+      return res.status(response.status).json({ error: msg })
+    }
+
+    const text = data.candidates?.[0]?.content?.parts?.[0]?.text || ''
+    res.json({ ok: true, text, model })
+  } catch (e) {
+    console.error('Trial API error:', e)
+    res.status(500).json({ error: e.message || '試用 API 請求失敗' })
+  }
+})
+
 // ── PDF/Image OCR ────────────────────────────────────────────────
 app.post('/api/ocr', upload.single('file'), async (req, res) => {
   try {
