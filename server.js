@@ -17,6 +17,7 @@ app.use(cors({
   origin: [
     'https://zanyws.github.io',
     'https://zanywr.pages.dev',
+    'https://easyur.pages.dev',
     'http://localhost:5173',
     'http://localhost:4173',
   ]
