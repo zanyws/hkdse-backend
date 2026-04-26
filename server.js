@@ -112,6 +112,7 @@ app.post('/api/save-worksheet', async (req, res) => {
       prompt: payloadData.prompt || null,
       response: payloadData.response,
       worksheetData: payloadData.worksheetData || null,
+      textConfig: payloadData.textConfig || null,
       metadata: payloadData.metadata || null,
     }
 

@@ -24,7 +24,10 @@ export async function saveWorksheetRecord(record) {
     prompt: record.prompt || null,
     response: record.response || null,
     worksheet_data: record.worksheetData || null,
-    metadata: record.metadata || null,
+    // 將 textConfig 合併至 metadata JSONB 欄位，無需新增資料庫欄位
+    metadata: record.textConfig
+      ? { ...(record.metadata || {}), textConfig: record.textConfig }
+      : (record.metadata || null),
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
   }
