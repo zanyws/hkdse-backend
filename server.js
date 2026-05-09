@@ -55,6 +55,7 @@ app.post('/api/ai-proxy', async (req, res) => {
     'api.openai.com',
     'api.anthropic.com',
     'api.groq.com',
+    'api.deepseek.com',
   ]
   const isAllowed = allowedDomains.some(domain => url.includes(domain))
   if (!isAllowed) {
@@ -163,19 +164,36 @@ app.post('/api/trial', async (req, res) => {
     return res.status(401).json({ error: '認證失敗：' + e.message })
   }
 
-  const apiKey = process.env.TRIAL_GEMINI_API_KEY
-  const model  = process.env.TRIAL_GEMINI_MODEL || 'gemini-2.0-flash'
-
-  if (!apiKey) {
-    return res.status(503).json({ error: '試用 API 暫未開放，請自行設定 API Key' })
-  }
-
-  const { systemPrompt, userPrompt, maxTokens = 65536 } = req.body
+  const { systemPrompt, userPrompt, maxTokens = 65536, trialProvider = 'gemini' } = req.body
   if (!userPrompt) {
     return res.status(400).json({ error: '缺少 userPrompt' })
   }
 
   try {
+    if (trialProvider === 'deepseek') {
+      const apiKey = process.env.TRIAL_DEEPSEEK_API_KEY
+      if (!apiKey) return res.status(503).json({ error: 'DeepSeek 試用 API 暫未開放，請改選其他模型或自行設定 API Key' })
+      const model = process.env.TRIAL_DEEPSEEK_MODEL || 'deepseek-v4-flash'
+      const messages = systemPrompt
+        ? [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }]
+        : [{ role: 'user', content: userPrompt }]
+      const response = await fetch('https://api.deepseek.com/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+        body: JSON.stringify({ model, messages, max_tokens: Math.min(maxTokens, 65536) }),
+      })
+      const data = await response.json()
+      if (!response.ok) {
+        const msg = data?.error?.message || `DeepSeek HTTP ${response.status}`
+        return res.status(response.status).json({ error: msg })
+      }
+      return res.json({ ok: true, text: data.choices?.[0]?.message?.content || '', model })
+    }
+
+    // Gemini (default)
+    const apiKey = process.env.TRIAL_GEMINI_API_KEY
+    if (!apiKey) return res.status(503).json({ error: 'Gemini 試用 API 暫未開放，請改選其他模型或自行設定 API Key' })
+    const model = process.env.TRIAL_GEMINI_MODEL || 'gemini-2.0-flash'
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`
     const response = await fetch(url, {
       method: 'POST',
@@ -190,15 +208,12 @@ app.post('/api/trial', async (req, res) => {
         },
       }),
     })
-
     const data = await response.json()
     if (!response.ok) {
       const msg = data?.error?.message || `Gemini HTTP ${response.status}`
       return res.status(response.status).json({ error: msg })
     }
-
-    const text = data.candidates?.[0]?.content?.parts?.[0]?.text || ''
-    res.json({ ok: true, text, model })
+    res.json({ ok: true, text: data.candidates?.[0]?.content?.parts?.[0]?.text || '', model })
   } catch (e) {
     console.error('Trial API error:', e)
     res.status(500).json({ error: e.message || '試用 API 請求失敗' })
