@@ -51,3 +51,28 @@ export async function getWorkSheetsByUser(userId) {
   }
   return data
 }
+
+export async function deleteWorksheetRecord(id, userId) {
+  const { error } = await supabaseAdmin
+    .from('ai_reading')
+    .delete()
+    .eq('id', id)
+    .eq('user_id', userId)  // 確保只能刪除自己的紀錄
+
+  if (error) {
+    throw error
+  }
+  return true
+}
+
+export async function deleteAllWorksheetsByUser(userId) {
+  const { error } = await supabaseAdmin
+    .from('ai_reading')
+    .delete()
+    .eq('user_id', userId)
+
+  if (error) {
+    throw error
+  }
+  return true
+}
