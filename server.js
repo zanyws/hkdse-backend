@@ -49,17 +49,15 @@ app.post('/api/ai-proxy', async (req, res) => {
     return res.status(400).json({ error: '缺少 url 參數' })
   }
 
-  // Security: only allow known AI API domains
-  const allowedDomains = [
-    'generativelanguage.googleapis.com',
-    'api.openai.com',
-    'api.anthropic.com',
-    'api.groq.com',
-    'api.deepseek.com',
-  ]
-  const isAllowed = allowedDomains.some(domain => url.includes(domain))
-  if (!isAllowed) {
-    return res.status(403).json({ error: '不允許的 API 域名' })
+  // Security: only allow HTTPS (prevents SSRF to internal networks)
+  // Users providing their own API key can use any HTTPS endpoint (custom providers)
+  try {
+    const parsed = new URL(url)
+    if (parsed.protocol !== 'https:') {
+      return res.status(403).json({ error: '只允許 HTTPS 請求（本地 API 請停用後端代理）' })
+    }
+  } catch {
+    return res.status(400).json({ error: '無效的 API URL' })
   }
 
   try {
@@ -192,6 +190,21 @@ app.delete('/api/worksheets', async (req, res) => {
   }
 })
 
+// ── Trial: custom provider from env (3 vars) ─────────────────────
+function getCustomProvider() {
+  const baseUrl = process.env.TRIAL_CUSTOM_BASE_URL
+  const apiKey  = process.env.TRIAL_CUSTOM_API_KEY
+  const model   = process.env.TRIAL_CUSTOM_MODEL
+  if (!baseUrl || !apiKey || !model) return null
+  return { baseUrl, apiKey, model }
+}
+
+// ── Trial providers list (public, no secrets) ────────────────────
+app.get('/api/trial-providers', (req, res) => {
+  const custom = getCustomProvider()
+  res.json({ providers: custom ? [{ id: 'custom', name: process.env.TRIAL_CUSTOM_MODEL }] : [] })
+})
+
 // ── Trial API (server-side Gemini key) ──────────────────────────
 app.post('/api/trial', async (req, res) => {
   // Verify Clerk token
@@ -209,16 +222,30 @@ app.post('/api/trial', async (req, res) => {
     return res.status(401).json({ error: '認證失敗：' + e.message })
   }
 
-  const { systemPrompt, userPrompt, maxTokens = 65536, trialProvider = 'gemini' } = req.body
+  // Allowed trial models per provider (validated server-side)
+  const TRIAL_ALLOWED_MODELS = {
+    gemini:   ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-2.0-flash-lite'],
+    deepseek: ['deepseek-v4-flash', 'deepseek-v3-0324', 'deepseek-chat'],
+  }
+
+  const { systemPrompt, userPrompt, maxTokens = 65536, trialProvider = 'gemini', trialModel } = req.body
   if (!userPrompt) {
     return res.status(400).json({ error: '缺少 userPrompt' })
+  }
+
+  // Validate requested model against allowlist; fall back to env default if invalid
+  function resolveModel(provider, requested) {
+    const allowed = TRIAL_ALLOWED_MODELS[provider] || []
+    return (requested && allowed.includes(requested))
+      ? requested
+      : null
   }
 
   try {
     if (trialProvider === 'deepseek') {
       const apiKey = process.env.TRIAL_DEEPSEEK_API_KEY
       if (!apiKey) return res.status(503).json({ error: 'DeepSeek 試用 API 暫未開放，請改選其他模型或自行設定 API Key' })
-      const model = process.env.TRIAL_DEEPSEEK_MODEL || 'deepseek-v4-flash'
+      const model = resolveModel('deepseek', trialModel) || process.env.TRIAL_DEEPSEEK_MODEL || 'deepseek-v4-flash'
       const messages = systemPrompt
         ? [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }]
         : [{ role: 'user', content: userPrompt }]
@@ -235,10 +262,30 @@ app.post('/api/trial', async (req, res) => {
       return res.json({ ok: true, text: data.choices?.[0]?.message?.content || '', model })
     }
 
+    // Custom provider (OpenAI-compatible)
+    if (trialProvider === 'custom') {
+      const customProvider = getCustomProvider()
+      if (!customProvider) return res.status(503).json({ error: '自定義試用 API 尚未配置' })
+      const messages = systemPrompt
+        ? [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }]
+        : [{ role: 'user', content: userPrompt }]
+      const response = await fetch(`${customProvider.baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${customProvider.apiKey}` },
+        body: JSON.stringify({ model: customProvider.model, messages, max_tokens: Math.min(maxTokens, 65536) }),
+      })
+      const data = await response.json()
+      if (!response.ok) {
+        const msg = data?.error?.message || `自定義 API HTTP ${response.status}`
+        return res.status(response.status).json({ error: msg })
+      }
+      return res.json({ ok: true, text: data.choices?.[0]?.message?.content || '', model: customProvider.model })
+    }
+
     // Gemini (default)
     const apiKey = process.env.TRIAL_GEMINI_API_KEY
     if (!apiKey) return res.status(503).json({ error: 'Gemini 試用 API 暫未開放，請改選其他模型或自行設定 API Key' })
-    const model = process.env.TRIAL_GEMINI_MODEL || 'gemini-2.0-flash'
+    const model = resolveModel('gemini', trialModel) || process.env.TRIAL_GEMINI_MODEL || 'gemini-2.0-flash'
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`
     const response = await fetch(url, {
       method: 'POST',
